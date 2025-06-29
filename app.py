@@ -1,10 +1,20 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from collections import Counter
-import os # It's good practice to have this for environment variables
+import os # Import the 'os' module to read environment variables
 
 app = Flask(__name__)
 CORS(app)
+
+# --- ADD A ROOT ROUTE FOR A BETTER USER EXPERIENCE ---
+@app.route('/')
+def index():
+    """Provides a simple status message when visiting the base URL."""
+    return jsonify({
+        "status": "online",
+        "message": "Exam Seating Allotment API is running.",
+        "api_endpoint": "/api/generate-allotment"
+    })
 
 def generate_usn_list(prefix, start, end):
     """Generates a list of USNs from a prefix, start, and end number."""
@@ -20,9 +30,9 @@ def generate_allotment_api():
         benches = int(room_details['benches'])
         students_per_bench = int(room_details['studentsPerBench'])
         class_columns = int(room_details['classColumns'])
-        
+
         student_layout_per_bench = [c.strip().upper() for c in data['studentLayout']]
-        
+
         branch_details = data['branchDetails']
         if not branch_details:
             return jsonify({'status': 'error', 'message': 'You must define at least one branch.'}), 400
@@ -36,18 +46,19 @@ def generate_allotment_api():
             'status': 'error',
             'message': f'Layout Mismatch: The number of student types in your layout ({len(student_layout_per_bench)}) must match students per bench ({students_per_bench}).'
         }), 400
-
+    
+    # Add validation for class_columns
     if class_columns <= 0:
         return jsonify({'status': 'error', 'message': 'Number of class columns must be greater than zero.'}), 400
 
     # --- Handle Uneven Bench Distribution ---
     base_benches_per_column = benches // class_columns
     remainder_benches = benches % class_columns
-    
+
     benches_in_each_column = [base_benches_per_column] * class_columns
     for i in range(remainder_benches):
         benches_in_each_column[i] += 1
-    
+
     # --- 3. Process Branches and Generate Student Lists ---
     student_lists = {}
     student_counts = {}
@@ -57,7 +68,7 @@ def generate_allotment_api():
         try:
             name = branch['name'].strip().upper()
             if not name: continue
-            
+
             prefix = branch['prefix']
             start = int(branch['start'])
             end = int(branch['end'])
@@ -78,10 +89,10 @@ def generate_allotment_api():
     for branch_name_in_layout in layout_branch_counts:
         if branch_name_in_layout not in defined_branch_names:
             return jsonify({'status': 'error', 'message': f'Layout Error: The branch "{branch_name_in_layout}" was used in the layout but was not defined in the branch list.'}), 400
-            
+
         num_students_for_branch = student_counts.get(branch_name_in_layout, 0)
         seats_available_for_branch = layout_branch_counts[branch_name_in_layout] * benches
-        
+
         if num_students_for_branch > seats_available_for_branch:
             return jsonify({
                 'status': 'error',
@@ -102,13 +113,13 @@ def generate_allotment_api():
                     current_bench_seats.append(student)
                 else:
                     current_bench_seats.append("---")
-            
+
             column_seating_plan.append({
                 'bench_number': bench_counter,
                 'seats': current_bench_seats
             })
             bench_counter += 1
-        
+
         arrangement_by_column.append({
             'name': f'Column {i + 1} ({benches_for_this_column} Benches)',
             'seating_plan': column_seating_plan
@@ -121,9 +132,10 @@ def generate_allotment_api():
         'arrangement_by_column': arrangement_by_column
     })
 
+
 # This block is for local development and will NOT be used by Render's Gunicorn server.
 if __name__ == '__main__':
-    # Render provides the PORT environment variable. Default to 5000 for local use.
+    # Render provides the PORT environment variable. We default to 5000 for local use.
     port = int(os.environ.get('PORT', 5000))
-    # debug=True is insecure for production. Gunicorn handles this properly.
+    # For production, debug must be False. We run on 0.0.0.0 to be accessible.
     app.run(host='0.0.0.0', port=port)
