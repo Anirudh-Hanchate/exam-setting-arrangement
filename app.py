@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from collections import Counter
+import os # It's good practice to have this for environment variables
 
-app =Flask(__name__)
+app = Flask(__name__)
 CORS(app)
 
 def generate_usn_list(prefix, start, end):
@@ -13,8 +14,8 @@ def generate_usn_list(prefix, start, end):
 def generate_allotment_api():
     data = request.get_json()
 
+    # --- 1. Extract All Inputs ---
     try:
-        # --- 1. Extract All Inputs ---
         room_details = data['roomDetails']
         benches = int(room_details['benches'])
         students_per_bench = int(room_details['studentsPerBench'])
@@ -36,9 +37,10 @@ def generate_allotment_api():
             'message': f'Layout Mismatch: The number of student types in your layout ({len(student_layout_per_bench)}) must match students per bench ({students_per_bench}).'
         }), 400
 
-    # --- FIXED: Handle Uneven Bench Distribution ---
-    # Instead of checking for perfect divisibility, we distribute the remainder.
-    # For 31 benches and 3 columns: base=10, remainder=1 -> [11, 10, 10]
+    if class_columns <= 0:
+        return jsonify({'status': 'error', 'message': 'Number of class columns must be greater than zero.'}), 400
+
+    # --- Handle Uneven Bench Distribution ---
     base_benches_per_column = benches // class_columns
     remainder_benches = benches % class_columns
     
@@ -78,7 +80,6 @@ def generate_allotment_api():
             return jsonify({'status': 'error', 'message': f'Layout Error: The branch "{branch_name_in_layout}" was used in the layout but was not defined in the branch list.'}), 400
             
         num_students_for_branch = student_counts.get(branch_name_in_layout, 0)
-        # Total seats available is based on the total number of benches, not per column
         seats_available_for_branch = layout_branch_counts[branch_name_in_layout] * benches
         
         if num_students_for_branch > seats_available_for_branch:
@@ -88,7 +89,6 @@ def generate_allotment_api():
             }), 400
 
     # --- 5. Build the Seating Grid (The Core Algorithm) ---
-    # FIXED: The algorithm now iterates based on the calculated benches_in_each_column list.
     arrangement_by_column = []
     bench_counter = 1
 
@@ -97,7 +97,6 @@ def generate_allotment_api():
         for _ in range(benches_for_this_column):
             current_bench_seats = []
             for branch_for_this_seat in student_layout_per_bench:
-                # Pop from the correct student list
                 if student_lists.get(branch_for_this_seat) and student_lists[branch_for_this_seat]:
                     student = student_lists[branch_for_this_seat].pop(0)
                     current_bench_seats.append(student)
@@ -111,7 +110,6 @@ def generate_allotment_api():
             bench_counter += 1
         
         arrangement_by_column.append({
-            # Informative name for the column group
             'name': f'Column {i + 1} ({benches_for_this_column} Benches)',
             'seating_plan': column_seating_plan
         })
@@ -123,5 +121,9 @@ def generate_allotment_api():
         'arrangement_by_column': arrangement_by_column
     })
 
+# This block is for local development and will NOT be used by Render's Gunicorn server.
 if __name__ == '__main__':
-    app.run(debug=True,host='0.0.0.0', port=5000)
+    # Render provides the PORT environment variable. Default to 5000 for local use.
+    port = int(os.environ.get('PORT', 5000))
+    # debug=True is insecure for production. Gunicorn handles this properly.
+    app.run(host='0.0.0.0', port=port)
