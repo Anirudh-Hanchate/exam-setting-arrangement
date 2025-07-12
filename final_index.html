@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Automated Exam Seating Generator</title>
+
+    <!-- jsPDF and AutoTable -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 2rem; }
+        .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08); }
+        h1 { text-align: center; color: #2c3e50; margin-bottom: 2rem; }
+        form { display: flex; flex-direction: column; gap: 1.5rem; }
+        fieldset { border: 1px solid #ddd; border-radius: 5px; padding: 1.5rem; }
+        legend { font-weight: 600; color: #3498db; padding: 0 0.5rem; }
+        .form-group { display: flex; flex-direction: column; }
+        label { margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 500; }
+        input[type="text"], input[type="number"] { padding: 0.75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; transition: border-color 0.2s, box-shadow 0.2s; box-sizing: border-box; width: 100%; }
+        input:focus { outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2); }
+        .room-group { display: grid; grid-template-columns: 3fr 1fr 1fr auto; gap: 1rem; align-items: flex-end; padding: 1rem; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 1rem; border-left: 3px solid #3498db; }
+        .branch-group-wrapper { padding: 1rem; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 1rem; border-left: 3px solid #2ecc71; }
+        .branch-group { display: grid; grid-template-columns: 2fr 3fr 1fr 1fr auto; gap: 1rem; align-items: flex-end; }
+        .remove-btn { background: #e74c3c; color: white; border: none; border-radius: 4px; padding: 0.75rem; cursor: pointer; font-weight: bold; transition: background-color 0.2s; height: 100%; }
+        .actions { text-align: left; margin-top: -0.5rem; margin-bottom: 1rem; }
+        .add-btn { background: #2ecc71; color: white; border: none; padding: 0.7rem 1.2rem; border-radius: 4px; cursor: pointer; font-weight: 500; margin-right: 10px; }
+        .submit-btn { background: #3498db; color: white; border: none; padding: 1rem; font-size: 1.1rem; font-weight: bold; border-radius: 4px; cursor: pointer; }
+        #statusContainer{margin-top:1.5rem}#status{padding:1rem;border-radius:5px}.status-error{background-color:#ffebee;color:#c62828}.status-warning{background-color:#fffde7;color:#f57f17}.status-info{background-color:#e3f2fd;color:#1565c0}.status-loading{background-color:#e1f5fe;color:#0277bd;text-align:center}
+        #resultsContainer{margin-top:2rem}
+        .results-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap: wrap;}
+        .export-btn{background-color:#1abc9c;color:#fff;border:none;padding:.7rem 1.2rem;border-radius:4px;cursor:pointer;font-weight:500;margin-left:.5rem;margin-top: 0.5rem;}
+        .export-btn:hover{background-color: #16a085;}
+        .report-btn{background-color:#9b59b6;}.report-btn:hover{background-color:#8e44ad;}
+        .room-plan-group { margin-bottom: 2.5rem; }
+        .room-plan-group > h2 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 0.5rem; }
+        table{width:100%;border-collapse:collapse;margin-top:1rem}th,td{border:1px solid #ddd;padding:.8rem;text-align:center}th{background-color:#f2f2f2;font-weight:600}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Exam Seat Arrangement</h1>
+        <form id="seatingForm">
+            <!-- Form fields are unchanged -->
+            <fieldset>
+                <legend>1. Global Bench Configuration</legend>
+                 <div class="form-group">
+                    <label for="studentsPerBenchInput">Number of Students per Bench (applies to all rooms)</label>
+                    <input type="number" id="studentsPerBenchInput" min="1" required value="2">
+                    <small style="font-size: 0.8rem; color: #666; margin-top: 5px;">The system will automatically create the best seating pattern (e.g., 2 creates A,B; 3 creates A,B,A).</small>
+                </div>
+            </fieldset>
+            <fieldset>
+                <legend>2. Common Paper Groups (Optional)</legend>
+                <div class="form-group">
+                    <label for="commonGroupsInput">Group branches with the same exam paper(Branches that CANNOT sit together)</label>
+                    <input type="text" id="commonGroupsInput" placeholder="e.g., CS,AI; ECE,EEE">
+                    <small style="font-size: 0.8rem; color: #666; margin-top: 5px;">Enter pairs separated by a comma, multiple pairs by a semicolon (;). These branches cannot sit together.</small>
+                </div>
+            </fieldset>
+            <fieldset>
+                <legend>3. Room Definitions</legend>
+                <div id="roomContainer"></div><div class="actions"><button type="button" class="add-btn" id="addRoomBtn" style="background-color: #3498db;">+ Add Room</button></div>
+            </fieldset>
+            <fieldset>
+                <legend>4. Branch / Section Definitions</legend>
+                <div id="branchContainer"></div><div class="actions"><button type="button" class="add-btn" id="addBranchBtn">+ Add Branch</button></div>
+            </fieldset>
+            <button type="submit" class="submit-btn">Generate Seating Plan</button>
+        </form>
+        <div id="statusContainer"></div>
+        <div id="resultsContainer"></div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const form = document.getElementById('seatingForm');
+        const roomContainer = document.getElementById('roomContainer');
+        const addRoomBtn = document.getElementById('addRoomBtn');
+        const branchContainer = document.getElementById('branchContainer');
+        const addBranchBtn = document.getElementById('addBranchBtn');
+        const statusContainer = document.getElementById('statusContainer');
+        const resultsContainer = document.getElementById('resultsContainer');
+        let lastSuccessfulResult = null;
+
+        const addRoomGroup = () => {
+            const roomId = `room-${Date.now()}`;
+            const roomGroup = document.createElement('div');
+            roomGroup.className = 'room-group';
+            roomGroup.id = roomId;
+            roomGroup.innerHTML = `
+                <div class="form-group"><label>Room Name/No.</label><input type="text" class="room-name" placeholder="e.g., Room 101" required></div>
+                <div class="form-group"><label>Total Benches</label><input type="number" class="room-benches" min="1" required placeholder="e.g., 40"></div>
+                <div class="form-group"><label>Class Columns</label><input type="number" class="room-columns" min="1" required placeholder="e.g., 3"></div>
+                <button type="button" class="remove-btn" onclick="document.getElementById('${roomId}').remove()">X</button>
+            `;
+            roomContainer.appendChild(roomGroup);
+        };
+
+        const addBranchGroup = () => {
+            const branchId = `branch-${Date.now()}`;
+            const branchWrapper = document.createElement('div');
+            branchWrapper.className = 'branch-group-wrapper';
+            branchWrapper.id = branchId;
+            branchWrapper.innerHTML = `
+                <div class="branch-group"><div class="form-group"><label>Branch Name</label><input type="text" class="branch-name" placeholder="e.g., AIML" required></div><div class="form-group"><label>USN Prefix</label><input type="text" class="branch-prefix" placeholder="e.g., 1XX21AI" required></div><div class="form-group"><label>Start No.</label><input type="number" class="branch-start" placeholder="e.g., 1" min="1" required></div><div class="form-group"><label>End No.</label><input type="number" class="branch-end" placeholder="e.g., 90" min="1" required></div><button type="button" class="remove-btn" onclick="document.getElementById('${branchId}').remove()">X</button></div>
+                <div class="form-group" style="padding:0 1rem .5rem;margin-top:.5rem"><label>Skip USN Numbers (comma-separated)</label><input type="text" class="branch-skip" placeholder="e.g., 5, 12, 45"></div>
+            `;
+            branchContainer.appendChild(branchWrapper);
+        };
+
+        addRoomBtn.addEventListener('click', addRoomGroup);
+        addBranchBtn.addEventListener('click', addBranchGroup);
+        
+        form.addEventListener('submit', async e => {
+            e.preventDefault();
+            statusContainer.innerHTML = '<div id="status" class="status-loading">Generating plan...</div>';
+            resultsContainer.innerHTML = "";
+            lastSuccessfulResult = null;
+            const allotmentData = {
+                studentsPerBench: document.getElementById("studentsPerBenchInput").value,
+                commonPaperGroups: document.getElementById("commonGroupsInput").value,
+                roomConfigurations: [],
+                branchDetails: []
+            };
+            document.querySelectorAll(".room-group").forEach(group => {
+                allotmentData.roomConfigurations.push({ name: group.querySelector(".room-name").value, benches: group.querySelector(".room-benches").value, classColumns: group.querySelector(".room-columns").value });
+            });
+            document.querySelectorAll(".branch-group-wrapper").forEach(group => {
+                allotmentData.branchDetails.push({ name: group.querySelector(".branch-name").value, prefix: group.querySelector(".branch-prefix").value, start: group.querySelector(".branch-start").value, end: group.querySelector(".branch-end").value, skip: group.querySelector(".branch-skip").value });
+            });
+            try {
+                const response = await fetch("http://127.0.0.1:5000/api/generate-allotment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(allotmentData) });
+                const result = await response.json();
+                if (response.ok && result.status === "success") {
+                    statusContainer.innerHTML = "";
+                    lastSuccessfulResult = result;
+                    displayResults(result);
+                } else {
+                    throw new Error(result.message || "An unknown server error occurred.");
+                }
+            } catch (error) {
+                statusContainer.innerHTML = `<div id="status" class="status-error"><b>Error:</b> ${error.message}</div>`;
+                console.error("API Error:", error);
+            }
+        });
+
+        addRoomGroup();
+        addBranchGroup();
+
+        const exportSummaryReport = () => {
+            if (!lastSuccessfulResult) return;
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
+            doc.setFontSize(18);
+            doc.text("Exam Administration Summary Report", 14, 22);
+            let startY = 30;
+
+            const addReportSection = (title, data, columns, color) => {
+                if (!data || Object.keys(data).length === 0) return;
+                
+                const filteredData = Object.entries(data).filter(([key, values]) => values.length > 0);
+                if(filteredData.length === 0) return;
+
+                if (startY > 240) { doc.addPage(); startY = 22; }
+                doc.setFontSize(14);
+                doc.text(title, 14, startY);
+                const body = filteredData.map(([key, values]) => [key, Array.isArray(values) ? values.join(', ') : `${values.length} student(s)`]);
+                
+                doc.autoTable({
+                    head: [columns],
+                    body: body,
+                    startY: startY + 6,
+                    theme: 'striped',
+                    headStyles: { fillColor: color }
+                });
+                startY = doc.autoTable.previous.finalY + 15;
+            };
+
+            addReportSection("Skipped (Ineligible) Students", lastSuccessfulResult.skipped_students, ['Branch', 'Skipped USNs'], [231, 76, 60]);
+            addReportSection("Unseated Students", lastSuccessfulResult.unseated_students, ['Branch / Group', 'Count Remaining'], [243, 156, 18]);
+            doc.save('summary-report.pdf');
+        };
+
+        const exportRoomLayoutsToPdf = () => {
+            if (!lastSuccessfulResult) return;
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' }); // Landscape for more horizontal space
+            const studentsPerBench = parseInt(document.getElementById('studentsPerBenchInput').value) || 2;
+
+            lastSuccessfulResult.room_arrangements.forEach((roomPlan, roomIndex) => {
+                if (roomIndex > 0) doc.addPage();
+
+                const margin = 10;
+                const pageHeight = doc.internal.pageSize.getHeight();
+                const pageWidth = doc.internal.pageSize.getWidth();
+                let currentY = margin + 12;
+
+                doc.setFontSize(18);
+                doc.setFont(undefined, 'bold');
+                doc.text(`CLASS ROOM NUMBER: ${roomPlan.room_name}`, pageWidth / 2, margin + 5, { align: 'center' });
+                doc.setFont(undefined, 'normal');
+
+                const numColumns = roomPlan.arrangement_by_column.length;
+                if (numColumns === 0) return;
+
+                const availableWidth = pageWidth - (2 * margin);
+                const columnWidth = availableWidth / numColumns;
+                
+                // --- COMPACT PDF SETTINGS ---
+                const benchHeight = 5 + (studentsPerBench * 3.5); // Reduced height
+                const benchGap = 1.5; // Reduced gap
+
+                let benchesProcessedInRoom = 0;
+                
+                roomPlan.arrangement_by_column.forEach((columnGroup, colIndex) => {
+                    const startX = margin + (colIndex * columnWidth);
+                    let columnY = currentY;
+
+                    // Use autoTable for a structured and compact layout
+                    const head = [['Bench', ...lastSuccessfulResult.student_seat_headers.map((h, i) => `Seat ${String.fromCharCode(65 + i)}`)]];
+                    const body = [];
+                    
+                    columnGroup.seating_plan.forEach(bench => {
+                        body.push([bench.bench_number, ...bench.seats]);
+                    });
+
+                    doc.autoTable({
+                        head: head,
+                        body: body,
+                        startY: columnY,
+                        theme: 'grid',
+                        headStyles: {
+                            fillColor: [44, 62, 80],
+                            textColor: 255,
+                            fontSize: 9,
+                        },
+                        bodyStyles: {
+                            fontSize: 9,
+                            cellPadding: 1.5,
+                        },
+                        columnStyles: {
+                            0: { fontStyle: 'bold', cellWidth: 14 }, // Bench number column
+                        },
+                        margin: { left: startX, right: pageWidth - (startX + columnWidth) },
+                        tableWidth: 'auto'
+                    });
+                });
+            });
+
+            doc.save('classroom-seating-layouts.pdf');
+        };
+        
+        const displayResults = (data) => {
+            let statusHTML = '';
+            const skipped = data.skipped_students;
+            if (skipped && Object.keys(skipped).length > 0) { statusHTML += `<div id="status" class="status-info" style="margin-bottom:1rem"><strong>Skipped (ineligible):</strong><ul style="margin-top:.5rem;columns:2;list-style-position:inside">`; Object.entries(skipped).forEach(([e,s])=>{statusHTML+=`<li><b>${e}:</b> ${s.join(", ")}</li>`}); statusHTML += `</ul></div>`; }
+            const unseated = data.unseated_students;
+            const hasUnseated = unseated && Object.values(unseated).some(list => list.length > 0);
+            if (hasUnseated) { statusHTML += `<div id="status" class="status-warning"><strong>Warning: Some students unseated.</strong><ul style="margin-top:.5rem;list-style-position:inside">`; Object.entries(unseated).forEach(([o,s])=>{if(s.length>0)statusHTML+=`<li><b>${o}:</b> ${s.length} student(s) remain.</li>`}); statusHTML += `</ul></div>`; }
+            statusContainer.innerHTML = statusHTML;
+
+            let resultsHTML = `
+                <div class="results-header">
+                    <h2>Generated Seating Plans</h2>
+                    <div>
+                        <button id="exportLayoutsBtn" class="export-btn">Export Room Layouts (PDF)</button>
+                        <button id="exportReportBtn" class="export-btn report-btn">Export Summary Report (PDF)</button>
+                    </div>
+                </div>
+                <div id="resultsTableContainer" style="margin-top: 1rem;">`;
+            
+            data.room_arrangements.forEach(roomPlan => {
+                resultsHTML += `<div class="room-plan-group"><h2>${roomPlan.room_name}</h2>`;
+                roomPlan.arrangement_by_column.forEach(columnGroup => {
+                    resultsHTML += `<div><h3>${columnGroup.name}</h3>`;
+                    resultsHTML += `<table><thead><tr><th>Bench #</th>`;
+                    data.student_seat_headers.forEach(header => {
+                        resultsHTML += `<th>${header}</th>`;
+                    });
+                    resultsHTML += '</tr></thead><tbody>';
+                    columnGroup.seating_plan.forEach(bench => {
+                        resultsHTML += `<tr><td><b>${bench.bench_number}</b></td>`;
+                        bench.seats.forEach(seat => {
+                            resultsHTML += `<td>${seat}</td>`;
+                        });
+                        resultsHTML += '</tr>';
+                    });
+                    resultsHTML += '</tbody></table></div>';
+                });
+                resultsHTML += `</div>`;
+            });
+            resultsHTML += '</div>';
+            
+            resultsContainer.innerHTML = resultsHTML;
+            
+            document.getElementById('exportLayoutsBtn').addEventListener('click', exportRoomLayoutsToPdf);
+            document.getElementById('exportReportBtn').addEventListener('click', exportSummaryReport);
+        };
+    });
+    </script>
+</body>
+</html>
