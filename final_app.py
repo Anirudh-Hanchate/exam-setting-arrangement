@@ -28,6 +28,7 @@ def generate_allotment_api():
       A pair of branches is seated together until one is exhausted.
     - Handles "Common Paper Groups" by merging them first.
     - Gracefully handles a single branch input.
+    - Supports a specific per-column bench distribution via 'benchesInColumns'.
     """
     data = request.get_json()
 
@@ -74,7 +75,6 @@ def generate_allotment_api():
         merged_list = []
         for branch_name in group:
             if branch_name not in defined_branch_names: return jsonify({'status': 'error', 'message': f"Common Group Error: The branch '{branch_name}' in group '{group_leader}' is not defined."}), 400
-            # This correctly merges lists sequentially, e.g., all EEE then all EC
             merged_list.extend(initial_student_lists.get(branch_name, []))
             processed_in_group.add(branch_name)
         final_student_lists[group_leader] = merged_list
@@ -83,65 +83,59 @@ def generate_allotment_api():
 
     total_benches = sum(int(room['benches']) for room in room_configurations)
     
-    # --- NEW "STICKY PAIRING" SEATING LOGIC ---
+    # --- "STICKY PAIRING" SEATING LOGIC (UNCHANGED) ---
     seated_benches = []
-    # Use a mutable copy of the lists to modify during seating
     working_student_lists = {k: list(v) for k, v in final_student_lists.items()}
-
-    # Continue as long as there are students to seat and benches available
     while sum(len(v) for v in working_student_lists.values()) > 0 and len(seated_benches) < total_benches:
-        # 1. Find the two largest available groups to form a "sticky pair"
-        available_groups = sorted(
-            [name for name, students in working_student_lists.items() if students],
-            key=lambda name: len(working_student_lists[name]),
-            reverse=True
-        )
-
-        if not available_groups:
-            break
-
+        available_groups = sorted([name for name, students in working_student_lists.items() if students], key=lambda name: len(working_student_lists[name]), reverse=True)
+        if not available_groups: break
         primary_group_name = available_groups[0]
         secondary_group_name = available_groups[1] if len(available_groups) > 1 else None
-
-        # 2. Exhaust this specific pairing until one of the groups runs out of students
         primary_list = working_student_lists[primary_group_name]
-        secondary_list = working_student_lists.get(secondary_group_name) # This will be None if there's no secondary group
-
-        # This inner loop ensures the pairing is "sticky"
+        secondary_list = working_student_lists.get(secondary_group_name)
         while primary_list and (secondary_group_name is None or secondary_list):
-            if len(seated_benches) >= total_benches:
-                break
-
+            if len(seated_benches) >= total_benches: break
             current_bench_seats = []
             seating_pattern = [primary_group_name if i % 2 == 0 else secondary_group_name for i in range(students_per_bench)]
-            
             for group_name in seating_pattern:
                 if group_name == primary_group_name and primary_list:
                     current_bench_seats.append(primary_list.pop(0))
                 elif group_name == secondary_group_name and secondary_list:
                     current_bench_seats.append(secondary_list.pop(0))
                 else:
-                    # Fill with empty seat if the designated group has no students or doesn't exist
                     current_bench_seats.append("---")
-            
             seated_benches.append(current_bench_seats)
-
-        # After the inner loop, one group is exhausted. The outer loop will now re-evaluate
-        # to find the next best pair from the remaining students.
-
     # --- SEATING LOGIC ENDS ---
 
     room_arrangements = []
     seated_bench_index = 0
-    bench_counter = 1
 
     for room_config in room_configurations:
+        # **CHANGE 1**: Bench counter is now reset for every new room.
+        bench_counter = 1 
         if seated_bench_index >= len(seated_benches): break
+        
+        try:
+            room_name = room_config.get('name', f"Room {len(room_arrangements) + 1}")
+            benches = int(room_config['benches'])
+            class_columns = int(room_config['classColumns'])
+            if benches <= 0 or class_columns <= 0:
+                 return jsonify({'status': 'error', 'message': f'Benches and columns must be positive for room {room_name}.'}), 400
+        except (ValueError, KeyError) as e:
+            return jsonify({'status': 'error', 'message': f'Invalid benches or column data for a room: {e}'}), 400
 
-        room_name = room_config.get('name', f"Room {len(room_arrangements) + 1}")
-        benches = int(room_config['benches'])
-        class_columns = int(room_config['classColumns'])
-        benches_in_each_column = [benches // class_columns + (1 if i < benches % class_columns else 0) for i in range(class_columns)]
+        benches_in_each_column = []
+        if 'benchesInColumns' in room_config and room_config['benchesInColumns']:
+            try:
+                benches_in_each_column = [int(b) for b in room_config['benchesInColumns']]
+                if sum(benches_in_each_column) != benches:
+                    return jsonify({'status': 'error', 'message': f'For room {room_name}, sum of column benches ({sum(benches_in_each_column)}) != total benches ({benches}).'}), 400
+                if len(benches_in_each_column) != class_columns:
+                    return jsonify({'status': 'error', 'message': f'For room {room_name}, # of column distributions ({len(benches_in_each_column)}) != # of columns ({class_columns}).'}), 400
+            except (ValueError, TypeError):
+                 return jsonify({'status': 'error', 'message': f'Invalid data in benchesInColumns for room {room_name}.'}), 400
+        else:
+            benches_in_each_column = [benches // class_columns + (1 if i < benches % class_columns else 0) for i in range(class_columns)]
         
         arrangement_by_column = []
         for i, benches_for_this_column in enumerate(benches_in_each_column):
@@ -154,10 +148,10 @@ def generate_allotment_api():
                 bench_counter += 1
             if column_seating_plan:
                 arrangement_by_column.append({'name': f'Column {i + 1} ({len(column_seating_plan)} Benches)','seating_plan': column_seating_plan})
+        
         if arrangement_by_column:
             room_arrangements.append({"room_name": room_name, "arrangement_by_column": arrangement_by_column})
 
-    # Use the final state of the working lists to determine unseated students
     unseated_students = {branch: students for branch, students in working_student_lists.items() if students}
     seat_headers = [f'Seat {i+1}' for i in range(students_per_bench)]
 
