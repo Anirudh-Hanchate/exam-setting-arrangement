@@ -5,9 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Automated Exam Seating Generator</title>
 
-    <!-- jsPDF and AutoTable -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
 
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 2rem; }
@@ -18,8 +20,9 @@
         legend { font-weight: 600; color: #3498db; padding: 0 0.5rem; }
         .form-group { display: flex; flex-direction: column; }
         label { margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 500; }
-        input[type="text"], input[type="number"] { padding: 0.75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; transition: border-color 0.2s, box-shadow 0.2s; box-sizing: border-box; width: 100%; }
+        input[type="text"], input[type="number"], input[type="file"] { padding: 0.75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; transition: border-color 0.2s, box-shadow 0.2s; box-sizing: border-box; width: 100%; }
         input:focus { outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2); }
+        input[type="file"] { padding: 0.6rem; }
         .room-group { display: grid; grid-template-columns: 3fr 1fr 1fr auto; gap: 1rem; align-items: flex-end; padding: 1rem; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 1rem; border-left: 3px solid #3498db; }
         .branch-group-wrapper { padding: 1rem; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 1rem; border-left: 3px solid #2ecc71; }
         .branch-group { display: grid; grid-template-columns: 2fr 3fr 1fr 1fr auto; gap: 1rem; align-items: flex-end; }
@@ -42,7 +45,6 @@
     <div class="container">
         <h1>Exam Seat Arrangement</h1>
         <form id="seatingForm">
-            <!-- Form fields are unchanged -->
             <fieldset>
                 <legend>1. Global Bench Configuration</legend>
                  <div class="form-group">
@@ -54,17 +56,29 @@
             <fieldset>
                 <legend>2. Common Paper Groups (Optional)</legend>
                 <div class="form-group">
-                    <label for="commonGroupsInput">Group branches with the same exam paper(Branches that CANNOT sit together)</label>
+                    <label for="commonGroupsInput">Group branches with the same exam paper (Branches that CANNOT sit together)</label>
                     <input type="text" id="commonGroupsInput" placeholder="e.g., CS,AI; ECE,EEE">
                     <small style="font-size: 0.8rem; color: #666; margin-top: 5px;">Enter pairs separated by a comma, multiple pairs by a semicolon (;). These branches cannot sit together.</small>
                 </div>
             </fieldset>
+            
             <fieldset>
-                <legend>3. Room Definitions</legend>
+                <legend>3. Upload Room Plan (Optional)</legend>
+                <div class="form-group">
+                    <label for="roomPlanUpload">Upload PDF or Excel file of the room layout</label>
+                    <input type="file" id="roomPlanUpload" accept=".pdf, .xlsx, .xls">
+                    <small style="font-size: 0.8rem; color: #666; margin-top: 5px;">
+                        <b>Format:</b> Col 1: Room Name, Col 2: Total Benches, Col 3: # of Columns, Col 4+: Benches in each specific column.
+                    </small>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>4. Room Definitions (Manual Entry / From Upload)</legend>
                 <div id="roomContainer"></div><div class="actions"><button type="button" class="add-btn" id="addRoomBtn" style="background-color: #3498db;">+ Add Room</button></div>
             </fieldset>
             <fieldset>
-                <legend>4. Branch / Section Definitions</legend>
+                <legend>5. Branch / Section Definitions</legend>
                 <div id="branchContainer"></div><div class="actions"><button type="button" class="add-btn" id="addBranchBtn">+ Add Branch</button></div>
             </fieldset>
             <button type="submit" class="submit-btn">Generate Seating Plan</button>
@@ -82,8 +96,13 @@
         const addBranchBtn = document.getElementById('addBranchBtn');
         const statusContainer = document.getElementById('statusContainer');
         const resultsContainer = document.getElementById('resultsContainer');
+        const roomPlanUpload = document.getElementById('roomPlanUpload');
         let lastSuccessfulResult = null;
 
+        if (window.pdfjsLib) {
+             pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+        }
+       
         const addRoomGroup = () => {
             const roomId = `room-${Date.now()}`;
             const roomGroup = document.createElement('div');
@@ -93,6 +112,7 @@
                 <div class="form-group"><label>Room Name/No.</label><input type="text" class="room-name" placeholder="e.g., Room 101" required></div>
                 <div class="form-group"><label>Total Benches</label><input type="number" class="room-benches" min="1" required placeholder="e.g., 40"></div>
                 <div class="form-group"><label>Class Columns</label><input type="number" class="room-columns" min="1" required placeholder="e.g., 3"></div>
+                <input type="hidden" class="room-benches-distribution">
                 <button type="button" class="remove-btn" onclick="document.getElementById('${roomId}').remove()">X</button>
             `;
             roomContainer.appendChild(roomGroup);
@@ -109,6 +129,94 @@
             `;
             branchContainer.appendChild(branchWrapper);
         };
+        
+        const populateRoomsUI = (rooms) => {
+            roomContainer.innerHTML = '';
+            rooms.forEach(room => {
+                const roomId = `room-${Date.now()}-${Math.random()}`;
+                const roomGroup = document.createElement('div');
+                roomGroup.className = 'room-group';
+                roomGroup.id = roomId;
+                roomGroup.innerHTML = `
+                    <div class="form-group"><label>Room Name/No.</label><input type="text" class="room-name" required></div>
+                    <div class="form-group"><label>Total Benches</label><input type="number" class="room-benches" min="1" required></div>
+                    <div class="form-group"><label>Class Columns</label><input type="number" class="room-columns" min="1" required></div>
+                    <input type="hidden" class="room-benches-distribution">
+                    <button type="button" class="remove-btn" onclick="document.getElementById('${roomId}').remove()">X</button>
+                `;
+                roomContainer.appendChild(roomGroup);
+                roomGroup.querySelector('.room-name').value = room.name || '';
+                roomGroup.querySelector('.room-benches').value = room.benches || '';
+                roomGroup.querySelector('.room-columns').value = room.classColumns || '';
+                if (room.benchesInColumns && room.benchesInColumns.length > 0) {
+                    roomGroup.querySelector('.room-benches-distribution').value = room.benchesInColumns.join(',');
+                }
+            });
+        };
+
+        const parseRoomDataFromRows = (rows) => {
+            const roomData = [];
+            rows.forEach((row, index) => {
+                if (index === 0 && (isNaN(parseInt(row[1])) || isNaN(parseInt(row[2])))) return;
+                if (!row || row.length < 3) return;
+                const name = String(row[0] || '').trim();
+                const totalBenches = parseInt(row[1]);
+                const numColumns = parseInt(row[2]);
+                if (!name || isNaN(totalBenches) || isNaN(numColumns)) return;
+                const benchesInColumns = row.slice(3, 3 + numColumns).map(Number);
+                const isValidDistribution = benchesInColumns.length === numColumns && !benchesInColumns.some(isNaN) && benchesInColumns.reduce((a, b) => a + b, 0) === totalBenches;
+                roomData.push({ name: name, benches: totalBenches, classColumns: numColumns, benchesInColumns: isValidDistribution ? benchesInColumns : [] });
+            });
+            return roomData;
+        };
+
+        const handleExcelFile = (file) => {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval:"" });
+                    const rooms = parseRoomDataFromRows(jsonRows);
+                    populateRoomsUI(rooms);
+                    statusContainer.innerHTML = `<div id="status" class="status-info">Successfully parsed ${rooms.length} rooms from Excel. You can now review them below.</div>`;
+                } catch (error) { statusContainer.innerHTML = `<div id="status" class="status-error"><b>Error:</b> Could not parse Excel file.</div>`; }
+            };
+            reader.readAsArrayBuffer(file);
+        };
+        
+        const handlePdfFile = (file) => {
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                const typedarray = new Uint8Array(e.target.result);
+                try {
+                    const pdf = await pdfjsLib.getDocument(typedarray).promise;
+                    let allRows = [];
+                    for (let i = 1; i <= pdf.numPages; i++) {
+                        const page = await pdf.getPage(i);
+                        const textContent = await page.getTextContent();
+                        if (textContent.items.length === 0) continue;
+                        const lines = new Map();
+                        textContent.items.forEach(item => { const y = Math.round(item.transform[5]); if (!lines.has(y)) lines.set(y, []); lines.get(y).push({ x: item.transform[4], text: item.str }); });
+                        const sortedLines = Array.from(lines.entries()).sort((a, b) => b[0] - a[0]);
+                        sortedLines.forEach(([y, items]) => { const rowText = items.sort((a, b) => a.x - b.x).map(item => item.text).join(' '); const cells = rowText.split(/\s{2,}/).map(s => s.trim()).filter(Boolean); if (cells.length > 1) allRows.push(cells); });
+                    }
+                    const rooms = parseRoomDataFromRows(allRows);
+                    populateRoomsUI(rooms);
+                    statusContainer.innerHTML = `<div id="status" class="status-info">Successfully parsed ${rooms.length} rooms from PDF. You can now review them below.</div>`;
+                } catch (error) { statusContainer.innerHTML = `<div id="status" class="status-error"><b>Error:</b> Could not parse PDF. It might be an image or have a complex format.</div>`; }
+            };
+            reader.readAsArrayBuffer(file);
+        };
+
+        roomPlanUpload.addEventListener('change', (event) => {
+            const file = event.target.files[0]; if (!file) return;
+            const fileName = file.name.toLowerCase();
+            if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) { handleExcelFile(file); } else if (fileName.endsWith('.pdf')) { handlePdfFile(file); } else { alert('Unsupported file type. Please upload a PDF or Excel file.');}
+            event.target.value = null;
+        });
 
         addRoomBtn.addEventListener('click', addRoomGroup);
         addBranchBtn.addEventListener('click', addBranchGroup);
@@ -118,187 +226,114 @@
             statusContainer.innerHTML = '<div id="status" class="status-loading">Generating plan...</div>';
             resultsContainer.innerHTML = "";
             lastSuccessfulResult = null;
-            const allotmentData = {
-                studentsPerBench: document.getElementById("studentsPerBenchInput").value,
-                commonPaperGroups: document.getElementById("commonGroupsInput").value,
-                roomConfigurations: [],
-                branchDetails: []
-            };
+            const allotmentData = { studentsPerBench: document.getElementById("studentsPerBenchInput").value, commonPaperGroups: document.getElementById("commonGroupsInput").value, roomConfigurations: [], branchDetails: [] };
             document.querySelectorAll(".room-group").forEach(group => {
-                allotmentData.roomConfigurations.push({ name: group.querySelector(".room-name").value, benches: group.querySelector(".room-benches").value, classColumns: group.querySelector(".room-columns").value });
+                const roomConfig = { name: group.querySelector(".room-name").value, benches: group.querySelector(".room-benches").value, classColumns: group.querySelector(".room-columns").value, };
+                const distribution = group.querySelector(".room-benches-distribution").value;
+                if (distribution) { roomConfig.benchesInColumns = distribution.split(',').map(Number); }
+                allotmentData.roomConfigurations.push(roomConfig);
             });
-            document.querySelectorAll(".branch-group-wrapper").forEach(group => {
-                allotmentData.branchDetails.push({ name: group.querySelector(".branch-name").value, prefix: group.querySelector(".branch-prefix").value, start: group.querySelector(".branch-start").value, end: group.querySelector(".branch-end").value, skip: group.querySelector(".branch-skip").value });
-            });
+            document.querySelectorAll(".branch-group-wrapper").forEach(group => { allotmentData.branchDetails.push({ name: group.querySelector(".branch-name").value, prefix: group.querySelector(".branch-prefix").value, start: group.querySelector(".branch-start").value, end: group.querySelector(".branch-end").value, skip: group.querySelector(".branch-skip").value }); });
             try {
                 const response = await fetch("http://127.0.0.1:5000/api/generate-allotment", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(allotmentData) });
                 const result = await response.json();
-                if (response.ok && result.status === "success") {
-                    statusContainer.innerHTML = "";
-                    lastSuccessfulResult = result;
-                    displayResults(result);
-                } else {
-                    throw new Error(result.message || "An unknown server error occurred.");
-                }
-            } catch (error) {
-                statusContainer.innerHTML = `<div id="status" class="status-error"><b>Error:</b> ${error.message}</div>`;
-                console.error("API Error:", error);
-            }
+                if (response.ok && result.status === "success") { statusContainer.innerHTML = ""; lastSuccessfulResult = result; displayResults(result); } else { throw new Error(result.message || "An unknown server error occurred."); }
+            } catch (error) { statusContainer.innerHTML = `<div id="status" class="status-error"><b>Error:</b> ${error.message}</div>`; console.error("API Error:", error); }
         });
 
-        addRoomGroup();
-        addBranchGroup();
+        addRoomGroup(); addBranchGroup();
 
-        const exportSummaryReport = () => {
-            if (!lastSuccessfulResult) return;
-            const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' });
-            doc.setFontSize(18);
-            doc.text("Exam Administration Summary Report", 14, 22);
-            let startY = 30;
-
-            const addReportSection = (title, data, columns, color) => {
-                if (!data || Object.keys(data).length === 0) return;
-                
-                const filteredData = Object.entries(data).filter(([key, values]) => values.length > 0);
-                if(filteredData.length === 0) return;
-
-                if (startY > 240) { doc.addPage(); startY = 22; }
-                doc.setFontSize(14);
-                doc.text(title, 14, startY);
-                const body = filteredData.map(([key, values]) => [key, Array.isArray(values) ? values.join(', ') : `${values.length} student(s)`]);
-                
-                doc.autoTable({
-                    head: [columns],
-                    body: body,
-                    startY: startY + 6,
-                    theme: 'striped',
-                    headStyles: { fillColor: color }
-                });
-                startY = doc.autoTable.previous.finalY + 15;
-            };
-
-            addReportSection("Skipped (Ineligible) Students", lastSuccessfulResult.skipped_students, ['Branch', 'Skipped USNs'], [231, 76, 60]);
-            addReportSection("Unseated Students", lastSuccessfulResult.unseated_students, ['Branch / Group', 'Count Remaining'], [243, 156, 18]);
-            doc.save('summary-report.pdf');
-        };
-
+        const exportSummaryReport = () => { if (!lastSuccessfulResult) return; const { jsPDF } = window.jspdf; const doc = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4' }); doc.setFontSize(18); doc.text("Exam Administration Summary Report", 14, 22); let startY = 30; const addReportSection = (title, data, columns, color) => { if (!data || Object.keys(data).length === 0) return; const filteredData = Object.entries(data).filter(([key, values]) => values.length > 0); if(filteredData.length === 0) return; if (startY > 240) { doc.addPage(); startY = 22; } doc.setFontSize(14); doc.text(title, 14, startY); const body = filteredData.map(([key, values]) => [key, Array.isArray(values) ? values.join(', ') : `${values.length} student(s)`]); doc.autoTable({ head: [columns], body: body, startY: startY + 6, theme: 'striped', headStyles: { fillColor: color } }); startY = doc.autoTable.previous.finalY + 15; }; addReportSection("Skipped (Ineligible) Students", lastSuccessfulResult.skipped_students, ['Branch', 'Skipped USNs'], [231, 76, 60]); addReportSection("Unseated Students", lastSuccessfulResult.unseated_students, ['Branch / Group', 'Count Remaining'], [243, 156, 18]); doc.save('summary-report.pdf'); };
+        
+        // **CHANGE 2**: This function is updated to add the branch-wise student count.
         const exportRoomLayoutsToPdf = () => {
             if (!lastSuccessfulResult) return;
 
             const { jsPDF } = window.jspdf;
-            const doc = new jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' }); // Landscape for more horizontal space
-            const studentsPerBench = parseInt(document.getElementById('studentsPerBenchInput').value) || 2;
+            const doc = new jsPDF({ orientation: 'l', unit: 'mm', format: 'a4' });
+            
+            // Create a mapping from USN prefix to Branch Name to identify students
+            const prefixToBranchMap = {};
+            document.querySelectorAll(".branch-group-wrapper").forEach(group => {
+                const name = group.querySelector(".branch-name").value.trim().toUpperCase();
+                const prefix = group.querySelector(".branch-prefix").value.trim();
+                if (name && prefix) {
+                    prefixToBranchMap[prefix] = name;
+                }
+            });
 
             lastSuccessfulResult.room_arrangements.forEach((roomPlan, roomIndex) => {
                 if (roomIndex > 0) doc.addPage();
-
                 const margin = 10;
                 const pageHeight = doc.internal.pageSize.getHeight();
                 const pageWidth = doc.internal.pageSize.getWidth();
-                let currentY = margin + 12;
 
+                // Calculate branch-wise student counts for the current room
+                const roomBranchCounts = {};
+                roomPlan.arrangement_by_column.forEach(column => {
+                    column.seating_plan.forEach(bench => {
+                        bench.seats.forEach(usn => {
+                            if (usn && usn !== "---") {
+                                for (const prefix in prefixToBranchMap) {
+                                    if (usn.startsWith(prefix)) {
+                                        const branchName = prefixToBranchMap[prefix];
+                                        roomBranchCounts[branchName] = (roomBranchCounts[branchName] || 0) + 1;
+                                        break; 
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+                
                 doc.setFontSize(18);
                 doc.setFont(undefined, 'bold');
                 doc.text(`CLASS ROOM NUMBER: ${roomPlan.room_name}`, pageWidth / 2, margin + 5, { align: 'center' });
                 doc.setFont(undefined, 'normal');
 
-                const numColumns = roomPlan.arrangement_by_column.length;
-                if (numColumns === 0) return;
+                let maxFinalY = margin + 12; // Track the lowest point of the tables
 
-                const availableWidth = pageWidth - (2 * margin);
-                const columnWidth = availableWidth / numColumns;
-                
-                // --- COMPACT PDF SETTINGS ---
-                const benchHeight = 5 + (studentsPerBench * 3.5); // Reduced height
-                const benchGap = 1.5; // Reduced gap
-
-                let benchesProcessedInRoom = 0;
-                
                 roomPlan.arrangement_by_column.forEach((columnGroup, colIndex) => {
+                    const numColumns = roomPlan.arrangement_by_column.length;
+                    const availableWidth = pageWidth - (2 * margin);
+                    const columnWidth = availableWidth / numColumns;
                     const startX = margin + (colIndex * columnWidth);
-                    let columnY = currentY;
-
-                    // Use autoTable for a structured and compact layout
                     const head = [['Bench', ...lastSuccessfulResult.student_seat_headers.map((h, i) => `Seat ${String.fromCharCode(65 + i)}`)]];
-                    const body = [];
+                    const body = columnGroup.seating_plan.map(bench => [bench.bench_number, ...bench.seats]);
                     
-                    columnGroup.seating_plan.forEach(bench => {
-                        body.push([bench.bench_number, ...bench.seats]);
-                    });
-
                     doc.autoTable({
-                        head: head,
-                        body: body,
-                        startY: columnY,
-                        theme: 'grid',
-                        headStyles: {
-                            fillColor: [44, 62, 80],
-                            textColor: 255,
-                            fontSize: 9,
-                        },
-                        bodyStyles: {
-                            fontSize: 9,
-                            cellPadding: 1.5,
-                        },
-                        columnStyles: {
-                            0: { fontStyle: 'bold', cellWidth: 14 }, // Bench number column
-                        },
+                        head: head, body: body, startY: margin + 12, theme: 'grid',
+                        headStyles: { fillColor: [44, 62, 80], textColor: 255, fontSize: 9 },
+                        bodyStyles: { fontSize: 9, cellPadding: 1.5 },
+                        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 14 } },
                         margin: { left: startX, right: pageWidth - (startX + columnWidth) },
                         tableWidth: 'auto'
                     });
+                    if (doc.autoTable.previous.finalY > maxFinalY) {
+                        maxFinalY = doc.autoTable.previous.finalY;
+                    }
                 });
+
+                // Add the summary text at the bottom of the page
+                if (Object.keys(roomBranchCounts).length > 0) {
+                    const summaryText = "Room Summary: " + Object.entries(roomBranchCounts)
+                        .map(([branch, count]) => `${branch}: ${count} student(s)`)
+                        .join('   |   ');
+                    
+                    if (maxFinalY > pageHeight - 25) { // Add new page if space is tight
+                        doc.addPage();
+                        maxFinalY = margin;
+                    }
+                    doc.setFontSize(10);
+                    doc.setFont(undefined, 'bold');
+                    doc.text(summaryText, margin, maxFinalY + 12);
+                }
             });
 
             doc.save('classroom-seating-layouts.pdf');
         };
-        
-        const displayResults = (data) => {
-            let statusHTML = '';
-            const skipped = data.skipped_students;
-            if (skipped && Object.keys(skipped).length > 0) { statusHTML += `<div id="status" class="status-info" style="margin-bottom:1rem"><strong>Skipped (ineligible):</strong><ul style="margin-top:.5rem;columns:2;list-style-position:inside">`; Object.entries(skipped).forEach(([e,s])=>{statusHTML+=`<li><b>${e}:</b> ${s.join(", ")}</li>`}); statusHTML += `</ul></div>`; }
-            const unseated = data.unseated_students;
-            const hasUnseated = unseated && Object.values(unseated).some(list => list.length > 0);
-            if (hasUnseated) { statusHTML += `<div id="status" class="status-warning"><strong>Warning: Some students unseated.</strong><ul style="margin-top:.5rem;list-style-position:inside">`; Object.entries(unseated).forEach(([o,s])=>{if(s.length>0)statusHTML+=`<li><b>${o}:</b> ${s.length} student(s) remain.</li>`}); statusHTML += `</ul></div>`; }
-            statusContainer.innerHTML = statusHTML;
 
-            let resultsHTML = `
-                <div class="results-header">
-                    <h2>Generated Seating Plans</h2>
-                    <div>
-                        <button id="exportLayoutsBtn" class="export-btn">Export Room Layouts (PDF)</button>
-                        <button id="exportReportBtn" class="export-btn report-btn">Export Summary Report (PDF)</button>
-                    </div>
-                </div>
-                <div id="resultsTableContainer" style="margin-top: 1rem;">`;
-            
-            data.room_arrangements.forEach(roomPlan => {
-                resultsHTML += `<div class="room-plan-group"><h2>${roomPlan.room_name}</h2>`;
-                roomPlan.arrangement_by_column.forEach(columnGroup => {
-                    resultsHTML += `<div><h3>${columnGroup.name}</h3>`;
-                    resultsHTML += `<table><thead><tr><th>Bench #</th>`;
-                    data.student_seat_headers.forEach(header => {
-                        resultsHTML += `<th>${header}</th>`;
-                    });
-                    resultsHTML += '</tr></thead><tbody>';
-                    columnGroup.seating_plan.forEach(bench => {
-                        resultsHTML += `<tr><td><b>${bench.bench_number}</b></td>`;
-                        bench.seats.forEach(seat => {
-                            resultsHTML += `<td>${seat}</td>`;
-                        });
-                        resultsHTML += '</tr>';
-                    });
-                    resultsHTML += '</tbody></table></div>';
-                });
-                resultsHTML += `</div>`;
-            });
-            resultsHTML += '</div>';
-            
-            resultsContainer.innerHTML = resultsHTML;
-            
-            document.getElementById('exportLayoutsBtn').addEventListener('click', exportRoomLayoutsToPdf);
-            document.getElementById('exportReportBtn').addEventListener('click', exportSummaryReport);
-        };
+        const displayResults = (data) => { let statusHTML = ''; const skipped = data.skipped_students; if (skipped && Object.keys(skipped).length > 0) { statusHTML += `<div id="status" class="status-info" style="margin-bottom:1rem"><strong>Skipped (ineligible):</strong><ul style="margin-top:.5rem;columns:2;list-style-position:inside">`; Object.entries(skipped).forEach(([e,s])=>{statusHTML+=`<li><b>${e}:</b> ${s.join(", ")}</li>`}); statusHTML += `</ul></div>`; } const unseated = data.unseated_students; const hasUnseated = unseated && Object.values(unseated).some(list => list.length > 0); if (hasUnseated) { statusHTML += `<div id="status" class="status-warning"><strong>Warning: Some students unseated.</strong><ul style="margin-top:.5rem;list-style-position:inside">`; Object.entries(unseated).forEach(([o,s])=>{if(s.length>0)statusHTML+=`<li><b>${o}:</b> ${s.length} student(s) remain.</li>`}); statusHTML += `</ul></div>`; } statusContainer.innerHTML = statusHTML; let resultsHTML = ` <div class="results-header"> <h2>Generated Seating Plans</h2> <div> <button id="exportLayoutsBtn" class="export-btn">Export Room Layouts (PDF)</button> <button id="exportReportBtn" class="export-btn report-btn">Export Summary Report (PDF)</button> </div> </div> <div id="resultsTableContainer" style="margin-top: 1rem;">`; data.room_arrangements.forEach(roomPlan => { resultsHTML += `<div class="room-plan-group"><h2>${roomPlan.room_name}</h2>`; roomPlan.arrangement_by_column.forEach(columnGroup => { resultsHTML += `<div><h3>${columnGroup.name}</h3>`; resultsHTML += `<table><thead><tr><th>Bench #</th>`; data.student_seat_headers.forEach(header => { resultsHTML += `<th>${header}</th>`; }); resultsHTML += '</tr></thead><tbody>'; columnGroup.seating_plan.forEach(bench => { resultsHTML += `<tr><td><b>${bench.bench_number}</b></td>`; bench.seats.forEach(seat => { resultsHTML += `<td>${seat}</td>`; }); resultsHTML += '</tr>'; }); resultsHTML += '</tbody></table></div>'; }); resultsHTML += `</div>`; }); resultsHTML += '</div>'; resultsContainer.innerHTML = resultsHTML; document.getElementById('exportLayoutsBtn').addEventListener('click', exportRoomLayoutsToPdf); document.getElementById('exportReportBtn').addEventListener('click', exportSummaryReport); };
     });
     </script>
 </body>
